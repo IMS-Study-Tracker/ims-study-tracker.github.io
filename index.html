@@ -309,6 +309,8 @@ table.lt .daynote{margin-left:0;font-size:10px;padding:0 6px;height:20px}
 .checks{list-style:none;margin:20px 0 0;padding:0;display:flex;flex-direction:column;gap:10px;font-size:14px;line-height:1.35}
 .checks li{display:flex;gap:10px;align-items:flex-start}
 .checks .tk{width:20px;height:20px;flex:0 0 20px;border-radius:50%;background:var(--green);color:#FFFFFF;font-size:11px;font-weight:900;display:inline-flex;align-items:center;justify-content:center}
+.checks .tk.wait{background:none;border:3px solid var(--line);border-top-color:var(--ink);box-sizing:border-box;animation:spin .9s linear infinite}
+.checks li.later{color:#5F6368}
 .donebtns{display:flex;gap:10px;margin-top:26px}
 @media (max-width:899px){.donebtns{flex-direction:column}}
 
@@ -889,6 +891,7 @@ table.stt input.sin{width:72px;height:32px;padding:0 8px;font-size:13px}
 @keyframes tick{to{stroke-dashoffset:0}}
 @keyframes ring{from{transform:scale(.5);opacity:.75}to{transform:scale(3.2);opacity:0}}
 @keyframes burst{0%{transform:translate(0,0) rotate(0) scale(.3);opacity:0}8%{opacity:1}55%{transform:translate(var(--dx),var(--dy)) rotate(var(--r)) scale(1);opacity:1}100%{transform:translate(calc(var(--dx) * 1.15),calc(var(--dy) + 180px)) rotate(calc(var(--r) * 2.2)) scale(.9);opacity:0}}
+@keyframes spin{to{transform:rotate(360deg)}}
 @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(43,168,74,0)}50%{box-shadow:0 0 0 6px rgba(43,168,74,.25)}}
 
 /* ---------- the tour ---------- */
@@ -4075,7 +4078,7 @@ function doUpload() {
   });
   chain.then(function () {
     var needPdf = sb ? (U.files.word && !U.files.pdf) : ext(U.files.slides.name) !== 'pdf';
-    progress(0.92, (needPdf ? 'Making the PDF, naming the files and ' : 'Naming the files and ') + (S.env === 'test' ? 'emailing the test list…' : 'emailing the group…'));
+    progress(0.92, needPdf ? 'Putting your files in the Drive…' : 'Naming the files and ' + (S.env === 'test' ? 'emailing the test list…' : 'emailing the group…'));
     var f = U.f, topics = {};
     topicKeys().forEach(function (id) { topics[id] = f.topics[id]; });
     return api('submit', {
@@ -4145,13 +4148,15 @@ function renderDone(v) {
     '<div class="openlinks">' + links.map(function (l, i) {
       return '<a href="' + h(l[3]) + '" target="_blank" rel="noopener" class="openlink up" style="animation-delay:' + (1.95 + i * 0.1).toFixed(2) + 's"><span aria-hidden="true" class="ico" style="background:' + l[1] + '">' + l[0] + '</span><b>' + l[2] + '</b></a>';
     }).join('') + '</div>' +
-    '<ul class="checks">' + r.steps.map(function (t, i) {
-      return '<li class="up" style="animation-delay:' + (2.2 + i * 0.16).toFixed(2) + 's"><span aria-hidden="true" class="tk" style="animation-delay:' + (2.3 + i * 0.16).toFixed(2) + 's">✓</span><span>' + h(t) + '</span></li>';
+    '<ul class="checks" aria-live="polite">' + r.steps.concat(r.pending ? r.pending.steps : []).map(function (t, i) {
+      var wait = r.pending && i >= r.steps.length;
+      return '<li class="up' + (wait ? ' pend' : '') + '" style="animation-delay:' + (2.2 + i * 0.16).toFixed(2) + 's"><span aria-hidden="true" class="tk' + (wait ? ' wait' : '') + '" style="animation-delay:' + (2.3 + i * 0.16).toFixed(2) + 's">' + (wait ? '' : '✓') + '</span><span>' + h(t) + '</span></li>';
     }).join('') + '</ul>' +
     '<div class="donebtns up" style="animation-delay:' + (2.3 + r.steps.length * 0.16).toFixed(2) + 's"><button class="btn" data-u="again">Upload something else</button><a class="btn2" href="' + h(pageHref('dashboard')) + '" data-go="dashboard" style="height:52px;font-size:16px">See the dashboard</a></div>' +
     (S.data.notify && S.data.notify.subscribe ? '<p class="up" style="margin:18px 0 0;font-size:14px;line-height:1.45;color:#5F6368;animation-delay:' + (2.4 + r.steps.length * 0.16).toFixed(2) + 's">Want an email whenever something is uploaded? <a href="' + h(S.data.notify.subscribe) + '" style="font-weight:700">Get the emails</a></p>' : '') +
     '</div></div></div>';
   v.onclick = function (e) { if (e.target.closest('[data-u="again"]')) { resetUpload(); swap(function () { renderPage(); }); } };
+  if (r.pending) finishUpload(r);
   if (!slides && !reduced() && r.after > before) {
     var n = before, step = 0, cnt = $('#cnt'), fill = $('#mfill');
     var tick = function () {
@@ -4163,6 +4168,35 @@ function renderDone(v) {
     setTimeout(tick, 2200);
   }
   function noteFor(d) { return d > 0 ? '+' + d + ' just now, thanks to you' : (r.mode === 'replace' ? 'Updated version, same count' : 'Counted once the lecture has been held'); }
+}
+
+// The PDF and the group email come after the done screen: they tick in as the server finishes them
+function finishUpload(r) {
+  var p = r.pending, slides = r.kind === 'slides';
+  r.pending = null;
+  var settle = function (texts, later) {
+    $$('.checks li.pend').forEach(function (li, i) {
+      li.classList.remove('pend');
+      if (later) li.classList.add('later');
+      var tk = li.querySelector('.tk');
+      tk.classList.remove('wait');
+      tk.textContent = later ? '…' : '✓';
+      li.lastChild.textContent = texts[i] || '';
+    });
+  };
+  api('finishUpload', { id: p.id }).then(function (f) {
+    if (!f.steps.length) { settle(['The PDF is being made in the background', 'The email goes out once it\'s ready'], true); return; }
+    r.steps = r.steps.concat(f.steps);
+    settle(f.steps);
+    if (f.links.pdf) {
+      r.links.pdf = f.links.pdf;
+      var box = $('.done .openlinks');
+      if (box) box.insertAdjacentHTML('afterbegin', '<a href="' + h(f.links.pdf) + '" target="_blank" rel="noopener" class="openlink"><span aria-hidden="true" class="ico" style="background:#1B1D1F">PDF</span><b>' + (slides ? 'Open the slides (PDF)' : 'Open the PDF') + '</b></a>');
+    }
+    api('state').then(setData, function () {});
+  }, function () {
+    settle(['The PDF will be made within the hour', 'The email goes out once it\'s ready'], true);
+  });
 }
 
 // =====================================================================================
