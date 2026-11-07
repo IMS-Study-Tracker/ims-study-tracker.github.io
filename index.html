@@ -3841,7 +3841,11 @@ function validateDetails() {
 // Upload step 4: files, existing parts, upload
 // =====================================================================================
 var ACCEPT = { word: ['docx', 'doc', 'odt'], pdf: ['pdf'], slides: ['pptx', 'ppt', 'pdf'] };
-var MAXMB = { word: 25, pdf: 25, slides: 50 };
+var MAXMB = { word: 100, pdf: 100, slides: 150 };
+// bigger files are too big for Google to convert, so we can't make their PDF (same as CONVERT_MB in Code.gs)
+var CONVMB = { word: 50, slides: 100 };
+function bigWord() { return !!U.files.word && U.files.word.size > CONVMB.word * 1048576; }
+function bigDeck() { return !!U.files.slides && ext(U.files.slides.name) !== 'pdf' && U.files.slides.size > CONVMB.slides * 1048576; }
 function ext(name) { var m = String(name).toLowerCase().match(/\.([a-z0-9]+)$/); return m ? m[1] : ''; }
 function existingParts() {
   var key = U.kind === 'slides' ? 'sl' : 'sb', parts = {};
@@ -3881,8 +3885,11 @@ function renderFiles(v) {
       (full ? 'This lecture already has ' + MAX_PARTS + ' parts, the limit. Replace one instead.' : 'Everything stays. Yours shows as ' + (sb ? 'PDF pt' : 'Slides pt') + next + ' on the dashboard. Up to ' + MAX_PARTS + ' parts per lecture.') + '</span></span></button></div>';
   }
   var slots = sb ? '<div class="files2"><div class="slot"><span>Word file' + (U.files.pdf ? ' <span class="muted" style="font-weight:500">optional</span>' : '') + '</span><div id="slot-word"></div></div>' +
-    '<div class="slot"><span>PDF' + (U.files.word || !U.files.pdf ? ' <span class="muted" style="font-weight:500">optional</span>' : '') + '</span><div id="slot-pdf"></div></div></div>'
-    : '<span style="display:block;font-size:14px;font-weight:700;margin-bottom:8px">PowerPoint or PDF</span><div id="slot-slides"></div><p style="margin:8px 2px 0;font-size:13px;line-height:1.4;color:#5F6368">Only have a PDF? Upload that instead, no PowerPoint needed.</p>';
+    '<div class="slot"><span>PDF' + (!bigWord() && (U.files.word || !U.files.pdf) ? ' <span class="muted" style="font-weight:500">optional</span>' : '') + '</span><div id="slot-pdf"></div></div></div>' +
+    '<p id="bignote" style="margin:8px 2px 0;font-size:13px;line-height:1.4;color:#5F6368"' + (bigWord() ? '' : ' hidden') + '>Your Word file is over ' + CONVMB.word + ' MB, too big for us to make the PDF, so add one too (in Word: File, Save as, PDF). Tip: File, Compress Pictures in Word usually brings it under ' + CONVMB.word + ' MB.</p>'
+    : '<span style="display:block;font-size:14px;font-weight:700;margin-bottom:8px">PowerPoint or PDF</span><div id="slot-slides"></div><p style="margin:8px 2px 0;font-size:13px;line-height:1.4;color:#5F6368">Only have a PDF? Upload that instead, no PowerPoint needed.</p>' +
+    '<div id="deckpdf"' + (bigDeck() ? '' : ' hidden') + ' style="margin-top:16px"><span style="display:block;font-size:14px;font-weight:700;margin-bottom:8px">PDF <span class="muted" style="font-weight:500">optional</span></span><div id="slot-pdf"></div>' +
+    '<p style="margin:8px 2px 0;font-size:13px;line-height:1.4;color:#5F6368">This PowerPoint is over ' + CONVMB.slides + ' MB, too big for us to make the PDF. Add one if you can (in PowerPoint: File, Save as, PDF). Without it, only the PowerPoint goes up.</p></div>';
   var people = sb ? 'Authors: ' + h(f.authors.join(', ')) + '<br>' + (f.reviewed ? 'Reviewed by ' + h(f.reviewers.join(', ')) : 'Not reviewed yet') : 'Uploaded by ' + h(myName());
   v.innerHTML =
     '<div class="wrap"><div class="cols"><div class="main">' + hsteps(4) +
@@ -3919,11 +3926,17 @@ function renderFiles(v) {
   };
 }
 function relabelSlots() {
-  if (U.kind !== 'sbobina') return;
+  if (U.kind !== 'sbobina') {
+    var dp = $('#deckpdf');
+    if (dp && dp.hidden === bigDeck()) { dp.hidden = !bigDeck(); renderSlot('pdf'); }
+    return;
+  }
   var labs = $$('.files2 .slot > span');
   if (labs.length !== 2) return;
   labs[0].innerHTML = 'Word file' + (U.files.pdf ? ' <span class="muted" style="font-weight:500">optional</span>' : '');
-  labs[1].innerHTML = 'PDF' + (U.files.word || !U.files.pdf ? ' <span class="muted" style="font-weight:500">optional</span>' : '');
+  labs[1].innerHTML = 'PDF' + (bigWord() ? '' : U.files.word || !U.files.pdf ? ' <span class="muted" style="font-weight:500">optional</span>' : '');
+  var bn = $('#bignote');
+  if (bn) bn.hidden = !bigWord();
 }
 function renderPartPanel(animate) {
   var holder = $('#partpanel');
@@ -3936,9 +3949,10 @@ function renderPartPanel(animate) {
   if (parts.length === 1 && !U.choice.part) { U.choice.part = parts[0].part; $('[data-u="part"]').setAttribute('aria-checked', 'true'); }
 }
 function slotInfo(slot) {
-  if (slot === 'word') return { title: 'Add a Word file', hint: U.files.pdf ? 'Optional. Without it, the dashboard shows Word as not available.' : '.docx, .doc or .odt, up to 25 MB. We make the PDF from it.' };
-  if (slot === 'pdf') return { title: 'Add a PDF', hint: U.files.word ? 'Skip it and we\'ll make the PDF from your Word file.' : 'Not needed if you add a Word file: we make the PDF from it. Up to 25 MB.' };
-  return { title: 'Add the slides', hint: '.pptx, .ppt or .pdf, up to 50 MB. We make a PDF from a PowerPoint.' };
+  if (slot === 'word') return { title: 'Add a Word file', hint: U.files.pdf ? 'Optional. Without it, the dashboard shows Word as not available.' : '.docx, .doc or .odt, up to 100 MB. We make the PDF from it if it\'s under ' + CONVMB.word + ' MB.' };
+  if (slot === 'pdf' && U.kind === 'slides') return { title: 'Add a PDF of the slides', hint: 'Up to 100 MB.' };
+  if (slot === 'pdf') return { title: 'Add a PDF', hint: bigWord() ? 'Needed: your Word file is too big for us to make it. Up to 100 MB.' : U.files.word ? 'Skip it and we\'ll make the PDF from your Word file.' : 'Not needed if you add a Word file: we make the PDF from it. Up to 100 MB.' };
+  return { title: 'Add the slides', hint: '.pptx, .ppt or .pdf, up to 150 MB. We make a PDF from a PowerPoint under ' + CONVMB.slides + ' MB.' };
 }
 function renderSlot(slot) {
   var box = $('#slot-' + slot);
@@ -3947,7 +3961,7 @@ function renderSlot(slot) {
   if (file) {
     var e = ext(file.name), isP = e === 'ppt' || e === 'pptx';
     var ico = slot === 'word' ? ['W', '#2457D6', 14] : e === 'pdf' ? ['PDF', '#1B1D1F', 11] : ['PPTX', '#1B1D1F', 11];
-    var note = slot === 'slides' && isP ? ', ready. We\'ll make a PDF from it.' : ', ready';
+    var note = slot === 'slides' && isP ? (bigDeck() ? ', ready. Too big for us to make a PDF.' : ', ready. We\'ll make a PDF from it.') : slot === 'word' && bigWord() ? ', ready. Too big for us to make the PDF.' : ', ready';
     box.innerHTML = '<div class="ff"><span aria-hidden="true" class="ico" style="background:' + ico[1] + ';font-size:' + ico[2] + 'px">' + ico[0] + '</span><span class="nm"><b>' + h(file.name) + '</b><small>' + mb(file.size) + note + '</small></span>' +
       '<button class="rm" data-u="rmfile" data-slot="' + slot + '" aria-label="Remove ' + h(file.name) + '">×</button></div>';
   } else {
@@ -3966,6 +3980,7 @@ function renderSlot(slot) {
 function takeFile(file, slot) {
   var e = ext(file.name);
   if (U.kind === 'sbobina') slot = e === 'pdf' ? 'pdf' : ACCEPT.word.indexOf(e) >= 0 ? 'word' : slot;
+  else if (slot === 'pdf' && e !== 'pdf') slot = 'slides';
   if (ACCEPT[slot].indexOf(e) < 0) { toast((U.kind === 'sbobina' ? 'Use a Word file (.docx, .doc, .odt) or a PDF.' : 'Use a PowerPoint (.pptx, .ppt) or a PDF.'), true); return; }
   if (file.size > MAXMB[slot] * 1048576) { toast(file.name + ' is ' + mb(file.size) + '. The limit is ' + MAXMB[slot] + ' MB.', true); return; }
   if (!file.size) { toast('That file is empty.', true); return; }
@@ -3992,6 +4007,7 @@ function refreshUploadState() {
   else if (parts.length && U.choice.mode === 'add') cta = 'Upload as part ' + partFor(parts);
   else cta = S.env === 'test' ? 'Upload and notify the test list' : 'Upload and notify the group';
   if (!hasFile && !(parts.length && !U.choice.mode)) cta = sb ? 'Add a Word file or a PDF' : 'Add the slides file';
+  if (sb && bigWord() && !U.files.pdf) { cta = 'Add a PDF too: the Word file is over ' + CONVMB.word + ' MB'; blocked = true; red = false; }
   if (U.busy) { cta = 'Uploading…'; blocked = true; }
   ['#cta1', '#cta2'].forEach(function (s) { var b = $(s); if (!b) return; b.textContent = cta; b.disabled = blocked; b.classList.toggle('red', red && !blocked); });
   var fn = $('#fname');
@@ -4001,10 +4017,10 @@ function refreshUploadState() {
     if (sb) {
       if (U.files.word) e.push('.' + ext(U.files.word.name));
       if (U.files.pdf || U.files.word) e.push('.pdf');
-      $('#fext').textContent = (e.length ? e.join(' and ') + '. ' : '') + (U.files.word && !U.files.pdf ? 'The PDF is made from your Word file. ' : '') + (!U.files.word && U.files.pdf ? 'Word marked as not available. ' : '') + 'Authors and reviewers go in the file description.';
+      $('#fext').textContent = (e.length ? e.join(' and ') + '. ' : '') + (U.files.word && !U.files.pdf && !bigWord() ? 'The PDF is made from your Word file. ' : '') + (!U.files.word && U.files.pdf ? 'Word marked as not available. ' : '') + 'Authors and reviewers go in the file description.';
     } else {
       var x = U.files.slides ? ext(U.files.slides.name) : '';
-      $('#fext').textContent = x && x !== 'pdf' ? '.pdf for everyone to open, with the .' + x + ' kept beside it' : '.pdf for everyone to open';
+      $('#fext').textContent = bigDeck() && !U.files.pdf ? '.' + x + ' only, with no PDF' : x && x !== 'pdf' ? '.pdf for everyone to open, with the .' + x + ' kept beside it' : '.pdf for everyone to open';
     }
   }
 }
@@ -4027,7 +4043,7 @@ function progress(frac, label) {
 // take it from the browser, or the connection drops, the server says how much arrived and the rest goes the old
 // way: in pieces through the server, each one a call of its own (much slower, but it always works).
 function uploadOne(slot, file, done, total, onBytes) {
-  return api('beginUpload', { slot: slot, name: file.name, size: file.size, origin: location.origin }).then(function (b) {
+  return api('beginUpload', { slot: slot, kind: U.kind, name: file.name, size: file.size, origin: location.origin }).then(function (b) {
     var sent = 0, count = function (n) { sent += n; onBytes(n); };
     var viaServer = function (start) {
       count(start - sent);
@@ -4060,9 +4076,9 @@ function putDirect(loc, file, count) {
   });
 }
 function doUpload() {
-  var sb = U.kind === 'sbobina', slots = sb ? ['word', 'pdf'] : ['slides'];
+  var sb = U.kind === 'sbobina', slots = sb ? ['word', 'pdf'] : bigDeck() ? ['slides', 'pdf'] : ['slides'];
   var todo = slots.filter(function (s) { return U.files[s]; });
-  if (!todo.length) return;
+  if (!todo.length || sb && bigWord() && !U.files.pdf) return;
   U.busy = true;
   refreshUploadState();
   $('#uperr').innerHTML = '';
@@ -4077,7 +4093,7 @@ function doUpload() {
     }).then(function (tok) { tokens[s] = tok; });
   });
   chain.then(function () {
-    var needPdf = sb ? (U.files.word && !U.files.pdf) : ext(U.files.slides.name) !== 'pdf';
+    var needPdf = sb ? (U.files.word && !U.files.pdf) : ext(U.files.slides.name) !== 'pdf' && !bigDeck();
     progress(0.92, needPdf ? 'Putting your files in the Drive…' : 'Naming the files and ' + (S.env === 'test' ? 'emailing the test list…' : 'emailing the group…'));
     var f = U.f, topics = {};
     topicKeys().forEach(function (id) { topics[id] = f.topics[id]; });
@@ -4362,7 +4378,7 @@ function renderAdmin(v, opt) {
     '<h1 class="ah1 rise">Admin' + (S.env === 'test' ? ' <span style="font-size:.4em;letter-spacing:0;vertical-align:middle" class="daynote">TEST DATA</span>' : '') + '</h1>' +
     '<p style="margin:10px 0 0;font-size:16px;color:#3C4043">Everything you change here is logged with your name.</p>' +
     '<div class="atabs" role="tablist" aria-label="Admin sections" id="atabs">' + tabsHtml() + '</div>' +
-    pane('todo', '<div id="allclear"></div><div id="sched"></div><div id="reqbox2"></div><div id="repwrap"><h2 class="h2">Reports</h2><div id="repbox"></div></div><div id="mailprob"></div>') +
+    pane('todo', '<div id="allclear"></div><div id="sched"></div><div id="reqbox2"></div><div id="repwrap"><h2 class="h2">Reports</h2><div id="repbox"></div></div><div id="mailprob"></div><div id="storewarn"></div>') +
     pane('lectures', '<section aria-labelledby="h-authors"><h2 id="h-authors" class="h2" style="margin-bottom:6px">Lectures and authors</h2><p style="margin:0 0 14px;font-size:15px;line-height:1.45;color:#3C4043">Add one or more authors per lecture. Lectures without authors stay grey and never turn overdue. Approved classmates can also volunteer for lectures nobody\'s been assigned to, up to ' + MAX_AUTHORS + ' people. Volunteers are grey: Confirm makes it an assignment they can\'t withdraw from. "Cancel lecture" is for a lecture that didn\'t happen: it stays struck through until a new schedule removes it.</p>' +
       '<div id="unmatched"></div><div id="authpills" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px"></div><div id="authlist"></div><p style="margin:10px 4px 0;font-size:13px;color:#5F6368">Changes save as you make them. The same chips appear on the dashboard while you\'re signed in.</p></section>') +
     pane('people', '<section><h2 class="h2">Approved classmates and access</h2><div id="accbox"></div></section><section><h2 class="h2">Workload</h2><div class="box" id="workbox"></div></section><section><h2 class="h2">Admins</h2><div id="adminbox"></div></section>') +
@@ -4373,7 +4389,7 @@ function renderAdmin(v, opt) {
     pane('activity', '<section><h2 class="h2">Activity</h2><div class="box" style="padding:6px 22px" id="actbox"></div></section>') +
     pane('stats', '<section><h2 class="h2">Stats</h2><div id="statsbox"><div class="loading">Loading…</div></div></section>') +
     '</main>';
-  renderSched(); renderReports(); renderAccess(); renderUnmatched(); renderAuthPills(); renderAuthList(); renderDrive(); renderRelevant(); renderMembers(); renderAdmins(); renderTest(); renderActivity(); renderAllClear(); renderWorkload();
+  renderSched(); renderReports(); renderAccess(); renderUnmatched(); renderAuthPills(); renderAuthList(); renderDrive(); renderRelevant(); renderMembers(); renderAdmins(); renderTest(); renderActivity(); renderStorage(); renderAllClear(); renderWorkload();
   var root = $('#admin');
   root.addEventListener('click', adminClick);
   root.addEventListener('input', function (e) { if (e.target.id === 'mq') { A.mq = e.target.value; $('#memlist').innerHTML = memberRows(); } });
@@ -4401,7 +4417,16 @@ var OLDSEC = { todo: 'todo', schedule: 'todo', reports: 'todo', requests: 'todo'
   settings: 'settings', drive: 'settings', email: 'settings', test: 'settings', activity: 'activity' };
 function todoCount() {
   var st = S.adminState;
-  return (st.schedule.pending ? 1 : 0) + st.reports.length + st.access.requests.length + ((st.mail.problems || []).length ? 1 : 0);
+  return (st.schedule.pending ? 1 : 0) + st.reports.length + st.access.requests.length + ((st.mail.problems || []).length ? 1 : 0) + (storeLow() ? 1 : 0);
+}
+// Drive space: warn when under 5 GB is left (10 GB used of the free 15), which still holds after buying more space
+function storeLow() { var s = S.adminState.storage; return !!s && s.limit > 0 && s.limit - s.used < 5 * 1073741824; }
+function gb(b) { return (b / 1073741824).toFixed(1) + ' GB'; }
+function storeLine() { var s = S.adminState.storage; return s ? gb(s.used) + (s.limit > 0 ? ' of ' + gb(s.limit) : '') + ' used' : ''; }
+function renderStorage() {
+  var box = $('#storewarn');
+  if (box) box.innerHTML = storeLow() ? '<h2 class="h2">Drive space</h2><div class="box" style="border:2px solid #D93025"><h3 class="h3" style="margin-bottom:6px;color:#B3261E">Drive is getting full: ' + h(storeLine()) + '</h3>' +
+    '<p style="margin:0;font-size:15px;line-height:1.5;color:#3C4043">When it\'s full, uploads stop working. Empty the Drive bin and delete old test files, or buy more space for the tracker\'s Google account (Google One).</p></div>' : '';
 }
 function tabsHtml() {
   var n = todoCount();
@@ -4421,7 +4446,7 @@ function showTab(id) {
 function renderAllClear() {
   var box = $('#allclear');
   if (!box) return;
-  box.innerHTML = todoCount() ? '' : '<div class="clear"><span aria-hidden="true" class="tk">✓</span><span><strong style="display:block;font-size:19px;font-weight:900">All clear</strong><span style="font-size:15px;color:#3C4043">No schedule changes, access requests, reports or email problems are waiting.</span></span></div>';
+  box.innerHTML = todoCount() ? '' : '<div class="clear"><span aria-hidden="true" class="tk">✓</span><span><strong style="display:block;font-size:19px;font-weight:900">All clear</strong><span style="font-size:15px;color:#3C4043">No schedule changes, access requests, reports, email problems or space warnings are waiting.</span></span></div>';
 }
 function scrollToSec(id) { var t = OLDSEC[String(id).replace('#', '')]; if (t) showTab(t); }
 function busy(btn, on, label) { if (!btn) return; if (on) { btn.dataset.label = btn.textContent; btn.textContent = label || 'Working…'; btn.disabled = true; } else { btn.textContent = btn.dataset.label || btn.textContent; btn.disabled = false; } }
@@ -4896,6 +4921,7 @@ function renderDrive() {
         '<label class="fld"><span class="mlab">Slides, anyone with the link</span><select class="inp" id="fl-' + c.code + '" aria-label="Slides folder for ' + h(c.name) + '">' + opts(m.slides) + '</select></label></div>';
     }).join('') +
     '<div style="margin-top:16px"><button class="sbtn" data-a="savefolders"' + (A.folders ? '' : ' disabled') + '>Save folders</button></div>' +
+    (storeLine() ? '<p style="margin:16px 0 0;font-size:14px;line-height:1.5;color:' + (storeLow() ? '#B3261E;font-weight:700' : '#5F6368') + '">Drive space: ' + h(storeLine()) + '.</p>' : '') +
     '<p style="margin:16px 0 0;font-size:14px;line-height:1.5;color:#5F6368">The portal never changes folder sharing. Set the three Slides folders to "Anyone with the link can view" in Drive yourself; the sbobine folders stay shared with the group only.</p>';
 }
 
